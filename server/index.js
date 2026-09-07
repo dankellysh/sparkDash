@@ -27,6 +27,7 @@ import { onceClose, resolveLlmHttpTarget } from "./collectors/llmTunnel.js";
 import { formatLlmBaseUrl, parseLlmTargetInput } from "../src/shared/llmTarget.js";
 import { llmDaily } from "./collectors/LlmDaily.js";
 import { compareSemver, getLatestRelease } from "./collectors/HermesReleases.js";
+import { authStub } from "./authStub.js";
 
 dotenv.config();
 
@@ -203,6 +204,7 @@ const app = express();
 const server = createServer(app);
 
 app.use(express.json());
+app.use(authStub);
 
 function clientKey(req) {
   return req.ip || req.socket?.remoteAddress || "unknown";
