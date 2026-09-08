@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "files": {
+    "node-snapshot-v1.schema.json": "0a3734f04dd5fcca1726d3266022e97f808db29eb67ce690712ce26314704802",
+    "trace-event-v1.schema.json": "178fa2f0b5606712d0f6bdadd81de716339ba14723f62ba7e06ec1d434d7a848",
+    "semantics.md": "4299fe08f60ce68a69a2ac3e54a7a91ddd92ab8571a312e7d7abf58f48a18362"
+  },
+  "bundle_sha256": "ec10961ac1edcc27a0ea29eebcd273fae0fac88fc276e26ddd41608ce99945c8"
+}

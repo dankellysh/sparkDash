@@ -9,6 +9,7 @@ import { SparkPage } from "./components/SparkPage/SparkPage";
 import { HermesUpdateDialog } from "./components/SparkPage/HermesUpdateDialog";
 import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
+import { VizPage } from "./viz/VizPage";
 import { ThemeSwitch } from "./components/ThemeSwitch";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { GearIcon, BoltIcon } from "./components/ui/icons";
@@ -301,6 +302,9 @@ function DashboardApp() {
             >
               <GearIcon className="h-4 w-4" />
             </button>
+            <a href="/viz" className="text-xs text-muted hover:text-text">
+              viz
+            </a>
             <ThemeSwitch />
           </div>
         </header>
@@ -369,6 +373,9 @@ function DashboardApp() {
 
 function App() {
   const route = useAppRoute();
+  if (route.mode === "viz") {
+    return <VizPage />;
+  }
   if (route.mode === "showcase" && route.showcaseSparkId) {
     return <ShowcasePage sparkId={route.showcaseSparkId} />;
   }

@@ -88,15 +88,16 @@ export function ingestSnapshots(sparks: SparkSnapshot[]): void {
     alive.add(s.id);
     sparkMap.set(s.id, s);
     if (!s.online) continue; // don't record zero-samples for offline hosts
+    if (s.metricsFresh === false || s.observeQuality === "unavailable") continue;
     const m = s.metrics;
     if (m.gpu) {
-      pushHistory(`${s.id}:gpu.usage`, m.gpu.usage);
-      pushHistory(`${s.id}:gpu.temp`, m.gpu.temperature);
+      if (m.gpu.usage != null) pushHistory(`${s.id}:gpu.usage`, m.gpu.usage);
+      if (m.gpu.temperature != null) pushHistory(`${s.id}:gpu.temp`, m.gpu.temperature);
     }
     if (m.cpu) {
-      pushHistory(`${s.id}:cpu.usage`, m.cpu.usage);
+      if (m.cpu.usage != null) pushHistory(`${s.id}:cpu.usage`, m.cpu.usage);
       // Skip 0°C so a missing sensor does not draw a fake floor on the sparkline.
-      if (m.cpu.temperature > 0) {
+      if (m.cpu.temperature != null && m.cpu.temperature > 0) {
         pushHistory(`${s.id}:cpu.temp`, m.cpu.temperature);
       }
     }

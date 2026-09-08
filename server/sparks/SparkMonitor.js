@@ -7,17 +7,11 @@ import { HermesProbe } from "../collectors/HermesProbe.js";
 import { TailscaleProbe } from "../collectors/TailscaleProbe.js";
 import { llmDaily } from "../collectors/LlmDaily.js";
 import { sshTest, sshExec } from "../collectors/ssh.js";
+import { getObserveHub, snapshotToPanels } from "../observe/hub.js";
+import { fetchExporterText, runFallbackTick } from "../observe/fallback.js";
 import {
-  POLL_INTERVAL_GPU,
-  POLL_INTERVAL_CPU,
-  POLL_INTERVAL_NETWORK,
-  POLL_INTERVAL_STORAGE,
   POLL_INTERVAL_LLM,
   POLL_INTERVAL_COMFY,
-  POLL_INTERVAL_BANDWIDTH,
-  POLL_INTERVAL_LIVENESS,
-  POLL_INTERVAL_HERMES,
-  POLL_INTERVAL_TAILSCALE,
   LLM_PORT,
   COMFY_PORT,
   HOST_PATHS,
@@ -128,6 +122,15 @@ export class SparkMonitor {
     this._running = false;
     /** @type {Record<string, boolean>} in-flight domain guards */
     this._inflight = {};
+    this._lastInboundAt = 0;
+    this._lastFallbackSshAt = 0;
+    this._fallbackSeq = 0;
+    this._cpuState = {};
+    this._observeQuality = null;
+    this._observedAtNs = null;
+    this._inboundSnap = null;
+    this._observeHub = options.observeHub || null;
+    this._fallbackInflight = false;
   }
 
   /** Hot-update config without tearing down poll loops / rate baselines. */
@@ -281,20 +284,12 @@ export class SparkMonitor {
     return Boolean(spark?.tailscaleMonitoring);
   }
 
-  /** Start or clear the tailnet poll timer based on monitoring flag. */
+  /** Clear any leftover tailnet timer. Scheduled SSH is not restarted. */
   _restartTailscalePollInterval() {
     if (this._tailscaleIntervalId != null) {
       clearInterval(this._tailscaleIntervalId);
       this._intervals = this._intervals.filter((id) => id !== this._tailscaleIntervalId);
       this._tailscaleIntervalId = null;
-    }
-    if (this._tailscaleMonitoringEnabled() && this._running) {
-      this._tailscaleIntervalId = setInterval(
-        () => this._pollDomain("tailscale"),
-        POLL_INTERVAL_TAILSCALE
-      );
-      this._intervals.push(this._tailscaleIntervalId);
-      void this._pollDomain("tailscale");
     }
   }
 
@@ -306,20 +301,12 @@ export class SparkMonitor {
     return Boolean(spark?.hermesMonitoring);
   }
 
-  /** Start or clear the Hermes update-check timer when monitoring flips. */
+  /** Clear any leftover Hermes timer. Scheduled SSH is not restarted. */
   _restartHermesPollInterval() {
     if (this._hermesIntervalId != null) {
       clearInterval(this._hermesIntervalId);
       this._intervals = this._intervals.filter((id) => id !== this._hermesIntervalId);
       this._hermesIntervalId = null;
-    }
-    if (this._hermesMonitoringEnabled() && this._running) {
-      this._hermesIntervalId = setInterval(
-        () => this._pollDomain("hermes"),
-        POLL_INTERVAL_HERMES
-      );
-      this._intervals.push(this._hermesIntervalId);
-      void this._pollDomain("hermes");
     }
   }
 
@@ -343,20 +330,69 @@ export class SparkMonitor {
     if (this._running) return;
     this._running = true;
     this._stopped = false;
-    this._poll();
-    this._intervals.push(setInterval(() => this._pollDomain("gpu"), POLL_INTERVAL_GPU));
-    this._intervals.push(setInterval(() => this._pollDomain("cpu"), POLL_INTERVAL_CPU));
-    this._intervals.push(setInterval(() => this._pollDomain("network"), POLL_INTERVAL_NETWORK));
-    this._intervals.push(setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE));
-    this._intervals.push(setInterval(() => this._pollDomain("ram"), POLL_INTERVAL_CPU));
-    this._intervals.push(setInterval(() => this._pollDomain("memory"), POLL_INTERVAL_BANDWIDTH));
+    // Slice 2: no scheduled SSH for gpu/cpu/net/storage/ram/memory.
+    // Inbound NodeSnapshot + fallback HTTP then rare SSH (see _fallbackTick).
+    this._lastInboundAt = 0;
+    this._lastFallbackSshAt = 0;
+    this._fallbackSeq = 0;
+    this._cpuState = {};
+    this._observeQuality = null;
+    this._observedAtNs = null;
+    this._intervals.push(setInterval(() => this._fallbackTick(), 2000));
     this._restartLlmPollInterval();
     this._restartComfyPollInterval();
-    this._restartHermesPollInterval();
-    this._restartTailscalePollInterval();
-    // Liveness on a slightly slower cadence
-    this._intervals.push(setInterval(() => this._checkOnline(), POLL_INTERVAL_LIVENESS));
-    console.log(`[SparkMonitor] ${this.spark.id} started`);
+    // No scheduled Hermes/Tailscale SSH — those stay on-demand.
+    console.log(`[SparkMonitor] ${this.spark.id} started (system SSH timers off)`);
+  }
+
+  applyInboundSnapshot(snap, panels, nowMs = Date.now()) {
+    this._lastInboundAt = nowMs;
+    this._inboundSnap = snap;
+    const projected =
+      panels || snapshotToPanels(snap, { now: nowMs, receivedAt: nowMs });
+    this._observeQuality = projected?.quality ?? snap?.quality ?? null;
+    this._observedAtNs = projected?.observed_at_ns ?? snap?.observed_at_ns ?? null;
+    if (projected?.gpu) {
+      this._metrics.gpu = { ...this._metrics.gpu, ...projected.gpu, power: { ...this._metrics.gpu?.power, ...projected.gpu.power } };
+    }
+    if (projected?.cpu) this._metrics.cpu = { ...this._metrics.cpu, ...projected.cpu };
+    if (projected?.unifiedMemory) {
+      this._metrics.unifiedMemory = { ...this._metrics.unifiedMemory, ...projected.unifiedMemory };
+    }
+    this.online = true;
+  }
+
+  async _fallbackTick() {
+    const ip = this.spark.lanIp;
+    if (!ip) return;
+    const hub = this._observeHub || getObserveHub();
+    await runFallbackTick({
+      nodeId: this.spark.id,
+      lastInboundAt: () => this._lastInboundAt,
+      lastSshAt: () => this._lastFallbackSshAt,
+      now: () => Date.now(),
+      mono: () => Number(process.hrtime.bigint()) / 1e9,
+      cpuState: this._cpuState,
+      isInflight: () => this._fallbackInflight,
+      setInflight: (v) => {
+        this._fallbackInflight = v;
+      },
+      fetchNode: () => fetchExporterText(`http://${ip}:9100/metrics`),
+      fetchDcgm: () => fetchExporterText(`http://${ip}:9400/metrics`),
+      nextSeq: () => this._fallbackSeq++,
+      ingest: (snap) => hub.ingest(snap),
+      apply: (snap) => this.applyInboundSnapshot(snap),
+      setOnline: (v) => {
+        this.online = v;
+      },
+      markUnknown: () => {
+        this._observeQuality = "unavailable";
+      },
+      sshTest: () => sshTest(this.spark),
+      noteSsh: (t) => {
+        this._lastFallbackSshAt = t;
+      },
+    });
   }
 
   /** Stop background polling. */
@@ -381,10 +417,23 @@ export class SparkMonitor {
   }
 
   /** Return a full snapshot of this Spark's metrics. */
-  snapshot() {
+  snapshot(nowMs = Date.now()) {
     const ports = this._llmMonitoringEnabled() ? this._llmPorts() : [];
     const comfyOn = this._comfyMonitoringEnabled();
     const tailscaleOn = this._tailscaleMonitoringEnabled();
+    const now = nowMs;
+    let gpu = this._metrics.gpu;
+    let cpu = this._metrics.cpu;
+    let unifiedMemory = this._metrics.unifiedMemory;
+    if (this._inboundSnap) {
+      const p = snapshotToPanels(this._inboundSnap, { now, receivedAt: this._lastInboundAt });
+      gpu = { ...gpu, ...p.gpu, power: { ...gpu?.power, ...p.gpu.power } };
+      cpu = { ...cpu, ...p.cpu };
+      unifiedMemory = { ...unifiedMemory, ...p.unifiedMemory };
+    }
+    const metricsFresh =
+      this._observeQuality !== "unavailable" &&
+      (gpu?.usage != null || gpu?.temperature != null || unifiedMemory?.total != null);
     return {
       id: this.spark.id,
       name: this.spark.name,
@@ -413,6 +462,9 @@ export class SparkMonitor {
       tailscaleMonitoring: tailscaleOn,
       hermes: this._hermes,
       hardware: this._hardwareSummary,
+      observeQuality: this._observeQuality,
+      observedAtNs: this._observedAtNs,
+      metricsFresh,
       metrics: {
         // NOTE: no `timestamp` here on purpose. The broadcast path skips
         // snapshots whose JSON is byte-identical to the previous one (see
@@ -421,12 +473,12 @@ export class SparkMonitor {
         // measured values are unchanged. The frontend does not consume a
         // metrics timestamp; the WS receive time can serve if one is ever
         // needed.
-        gpu: this._metrics.gpu,
-        cpu: this._metrics.cpu,
+        gpu,
+        cpu,
         ram: this._metrics.ram,
         storage: this._metrics.storage,
         network: this._metrics.network,
-        unifiedMemory: this._metrics.unifiedMemory,
+        unifiedMemory,
         llm: this._metrics.llm,
         comfy: comfyOn ? this._metrics.comfy : null,
         tailscale: tailscaleOn ? this._metrics.tailscale : null,

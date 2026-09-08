@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dgxspark.local/telemetry/trace-event-v1.schema.json",
+  "title": "DGX trace event v1 (producer ingest: hub_order forbidden)",
+  "$ref": "#/$defs/ingest",
+  "$defs": {
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "producer_id",
+        "seq",
+        "run_id",
+        "observed_at_ns",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": { "const": "dgx.trace-event.v1" },
+        "producer_id": { "type": "string", "minLength": 1 },
+        "seq": { "type": "integer", "minimum": 0 },
+        "run_id": { "type": "string", "minLength": 1 },
+        "hub_order": { "type": "integer", "minimum": 0 },
+        "observed_at_ns": { "type": "integer", "minimum": 0 },
+        "type": {
+          "enum": [
+            "run.started",
+            "node.snapshot",
+            "step.completed",
+            "output.delta",
+            "gap",
+            "run.finished"
+          ]
+        },
+        "payload": { "type": "object" },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "type": { "const": "run.started" },
+                "payload": { "$ref": "#/$defs/runStartedPayload" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "node.snapshot" },
+                "payload": {
+                  "$ref": "https://schemas.dgxspark.local/telemetry/node-snapshot-v1.schema.json#/$defs/body"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "step.completed" },
+                "payload": { "$ref": "#/$defs/stepCompletedPayload" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "output.delta" },
+                "payload": { "$ref": "#/$defs/outputDeltaPayload" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "gap" },
+                "payload": { "$ref": "#/$defs/gapPayload" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "run.finished" },
+                "payload": { "$ref": "#/$defs/runFinishedPayload" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "ingest": {
+      "allOf": [
+        { "$ref": "#/$defs/event" },
+        { "not": { "required": ["hub_order"] } },
+        {
+          "not": {
+            "properties": { "type": { "const": "gap" } },
+            "required": ["type"]
+          }
+        }
+      ]
+    },
+    "hubOutput": {
+      "$anchor": "hub-output",
+      "allOf": [
+        { "$ref": "#/$defs/event" },
+        { "required": ["hub_order"] }
+      ]
+    },
+    "runStartedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_id",
+        "members",
+        "capabilities",
+        "schema_version",
+        "schema_bundle_hash",
+        "geometry"
+      ],
+      "properties": {
+        "profile_id": { "type": ["string", "null"] },
+        "model_id": { "type": "string", "minLength": 1 },
+        "schema_version": { "const": 1 },
+        "schema_bundle_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "node.steady",
+              "node.burst",
+              "output.text",
+              "engine.step",
+              "speculative.rows",
+              "routing.experts",
+              "power.system"
+            ]
+          }
+        },
+        "geometry": { "$ref": "#/$defs/geometry" },
+        "topology": { "type": ["string", "null"] },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layers",
+        "experts",
+        "routed_experts",
+        "top_k",
+        "top_k_per_layer",
+        "ranks",
+        "route_scope"
+      ],
+      "properties": {
+        "layers": { "type": "integer", "minimum": 1 },
+        "experts": { "type": "integer", "minimum": 0 },
+        "routed_experts": { "type": "integer", "minimum": 0 },
+        "top_k": { "type": "integer", "minimum": 0 },
+        "top_k_per_layer": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "ranks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/rankMember" }
+        },
+        "route_scope": { "enum": ["replicated", "rank", "unknown"] },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "rankMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["member", "rank"],
+      "properties": {
+        "member": { "type": "string", "minLength": 1 },
+        "rank": { "type": "integer", "minimum": 0 },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "stepCompletedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "step",
+        "started_at_ns",
+        "duration_ns",
+        "token_rows"
+      ],
+      "properties": {
+        "request_id": { "type": "string", "minLength": 1 },
+        "member": { "type": ["string", "null"], "minLength": 1 },
+        "rank": { "type": ["integer", "null"], "minimum": 0 },
+        "step": { "type": "integer", "minimum": 0 },
+        "started_at_ns": { "type": "integer", "minimum": 0 },
+        "duration_ns": { "type": "integer", "minimum": 0 },
+        "token_rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/tokenRow" }
+        },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "tokenRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row", "accepted"],
+      "properties": {
+        "row": { "type": "integer", "minimum": 0 },
+        "accepted": { "type": "boolean" },
+        "token_id": { "type": ["integer", "null"], "minimum": 0 },
+        "text": { "type": ["string", "null"] },
+        "routes": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "outputDeltaPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "text"],
+      "properties": {
+        "request_id": { "type": "string", "minLength": 1 },
+        "text": { "type": "string" },
+        "step": { "type": ["integer", "null"], "minimum": 0 },
+        "token_ids": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "gapPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first_missing_hub_order",
+        "last_missing_hub_order",
+        "reason"
+      ],
+      "properties": {
+        "first_missing_hub_order": { "type": "integer", "minimum": 0 },
+        "last_missing_hub_order": { "type": "integer", "minimum": 0 },
+        "reason": {
+          "enum": ["drop", "reconnect", "crash", "unknown"]
+        },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "runFinishedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": { "enum": ["stop", "length", "cancelled", "error", "unknown"] },
+        "error": { "type": ["string", "null"] },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    }
+  }
+}

@@ -88,23 +88,26 @@ function SparkCard({
   const gpu = spark.metrics.gpu;
   const um = spark.metrics.unifiedMemory;
   const online = spark.online;
+  const useUma = spark.kind !== "host";
+  const envelopeLive = spark.metricsFresh !== false && spark.observeQuality !== "unavailable";
+  const usage = envelopeLive ? gpu?.usage ?? null : null;
+  const tempRaw = envelopeLive ? gpu?.temperature ?? null : null;
+  const displayTemp =
+    tempRaw == null ? null : temperatureUnit === "fahrenheit" ? celsiusToFahrenheit(tempRaw) : tempRaw;
+  const tempLabel =
+    displayTemp == null ? "—" : temperatureUnit === "fahrenheit" ? `${displayTemp}°F` : `${displayTemp}°C`;
+  const vramPct = envelopeLive ? (useUma ? um?.percentage ?? null : gpu?.vram?.percentage ?? null) : null;
+  const vramUsed = envelopeLive ? (useUma ? um?.used ?? null : gpu?.vram?.used ?? null) : null;
+  const vramTotal = envelopeLive ? (useUma ? um?.total ?? null : gpu?.vram?.total ?? null) : null;
+  const vramAvail = envelopeLive ? (useUma ? um?.available ?? null : gpu?.vram?.available ?? null) : null;
+  const hasReading = usage != null || tempRaw != null || vramTotal != null;
 
-  const usage = gpu?.usage ?? 0;
-  const tempRaw = gpu?.temperature ?? 0;
-  const displayTemp = temperatureUnit === "fahrenheit" ? celsiusToFahrenheit(tempRaw) : tempRaw;
-  const tempLabel = temperatureUnit === "fahrenheit" ? `${displayTemp}°F` : `${displayTemp}°C`;
-  const vramPct = gpu?.vram?.percentage ?? um?.percentage ?? 0;
-  const vramUsed = gpu?.vram?.used ?? um?.used ?? 0;
-  const vramTotal = gpu?.vram?.total ?? um?.total ?? 0;
-  const vramAvail = gpu?.vram?.available ?? um?.available ?? 0;
-
-  // Temperature bar: cool → success, warm → warning, hot → danger
   const tempBarColor =
-    tempRaw > 85 ? "bg-danger" : tempRaw > 65 ? "bg-warning" : tempRaw > 40 ? "bg-accent" : "bg-success";
-  // Usage bar: accent for moderate, warning high, danger critical
-  const usageBarColor = usage > 85 ? "bg-danger" : usage > 60 ? "bg-warning" : "bg-accent";
-  // VRAM allocation: accent normal → warning/danger as it fills
-  const vramBarColor = vramPct > 85 ? "bg-danger" : vramPct > 60 ? "bg-warning" : "bg-accent";
+    tempRaw == null ? "bg-border" : tempRaw > 85 ? "bg-danger" : tempRaw > 65 ? "bg-warning" : tempRaw > 40 ? "bg-accent" : "bg-success";
+  const usageBarColor =
+    usage == null ? "bg-border" : usage > 85 ? "bg-danger" : usage > 60 ? "bg-warning" : "bg-accent";
+  const vramBarColor =
+    vramPct == null ? "bg-border" : vramPct > 85 ? "bg-danger" : vramPct > 60 ? "bg-warning" : "bg-accent";
 
   return (
     <div
@@ -193,23 +196,34 @@ function SparkCard({
         </span>
       </div>
 
-      {!online || !gpu ? (
+      {!online || !envelopeLive || !hasReading || !gpu ? (
         <div className="flex h-[120px] items-center justify-center">
           <span className="text-[13px] text-muted">
-            {online ? "Waiting for metrics…" : "Host unreachable"}
+            {!online ? "Host unreachable" : !envelopeLive || !hasReading ? "Stale / unavailable" : "Waiting for metrics…"}
           </span>
         </div>
       ) : (
         <>
           {/* Three headline bars: GPU alloc, Temp, Usage */}
           <div className="flex flex-col gap-3.5">
+            {vramTotal != null && vramTotal > 0 && vramUsed != null ? (
             <MetricBar
-              label="VRAM"
+              label={useUma ? "UMA" : "VRAM"}
               value={vramUsed}
               max={vramTotal}
               color={vramBarColor}
-              caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
+              caption={`${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}`}
             />
+            ) : (
+              <div className="flex justify-between text-xs">
+                <span className="text-muted">{useUma ? "UMA" : "VRAM"}</span>
+                <span className="font-tabular text-text">
+                  {vramTotal != null && vramTotal > 0
+                    ? `${vramUsed == null ? "—" : fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}`
+                    : "—"}
+                </span>
+              </div>
+            )}
             {spark.kind === "host" && (() => {
               // Non-Spark hosts: system RAM is separate from discrete VRAM.
               const ram = spark.metrics.ram;
@@ -227,6 +241,7 @@ function SparkCard({
                 />
               );
             })()}
+            {tempRaw != null && displayTemp != null ? (
             <MetricBar
               label={
                 spark.kind === "host" || (spark.metrics.cpu?.temperature ?? 0) > 0
@@ -238,6 +253,12 @@ function SparkCard({
               color={tempBarColor}
               caption={tempLabel}
             />
+            ) : (
+              <div className="flex justify-between text-xs">
+                <span className="text-muted">Temperature</span>
+                <span className="font-tabular text-text">—</span>
+              </div>
+            )}
             {(spark.metrics.cpu?.temperature ?? 0) > 0 && (() => {
               const cpuRaw = spark.metrics.cpu?.temperature ?? 0;
               const cpuDisplay =
@@ -264,6 +285,7 @@ function SparkCard({
                 Thermal throttle
               </div>
             )}
+            {usage != null ? (
             <MetricBar
               label="Usage"
               value={usage}
@@ -271,6 +293,12 @@ function SparkCard({
               color={usageBarColor}
               caption={`${usage}%`}
             />
+            ) : (
+              <div className="flex justify-between text-xs">
+                <span className="text-muted">Usage</span>
+                <span className="font-tabular text-text">—</span>
+              </div>
+            )}
           </div>
 
           {/* Secondary stats */}
@@ -279,7 +307,7 @@ function SparkCard({
               label="GPU Power"
               value={`${gpu?.power?.draw ?? 0}W / ${gpu?.power?.limit ?? 0}W`}
             />
-            {vramAvail > 0 && (
+            {vramAvail != null && vramAvail > 0 && (
               <MiniStat
                 label="Available"
                 value={formatMb(vramAvail)}

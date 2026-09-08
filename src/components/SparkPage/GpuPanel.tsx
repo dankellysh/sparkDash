@@ -1,4 +1,4 @@
-import type { CpuMetrics, GpuMetrics } from "../../api/types";
+import type { CpuMetrics, GpuMetrics, UnifiedMemoryMetrics } from "../../api/types";
 import { Sparkline } from "../ui/Sparkline";
 import { Panel } from "../ui/Panel";
 import { ActivityIcon } from "../ui/icons";
@@ -9,6 +9,10 @@ interface GpuPanelProps {
   gpu: GpuMetrics | null;
   /** When set and temperature > 0, show a CPU temp row (DGX Spark pages). */
   cpu?: CpuMetrics | null;
+  /** GB10 UMA from node-exporter; not discrete GPU allocation. */
+  unifiedMemory?: UnifiedMemoryMetrics | null;
+  memoryKind?: "uma" | "vram";
+  metricsFresh?: boolean;
   sparkId: string;
   temperatureUnit: "celsius" | "fahrenheit";
   className?: string;
@@ -45,21 +49,25 @@ function MetricRow({
   );
 }
 
-export function GpuPanel({ gpu, cpu, sparkId, temperatureUnit, className }: GpuPanelProps) {
+export function GpuPanel({ gpu, cpu, unifiedMemory, memoryKind, metricsFresh = true, sparkId, temperatureUnit, className }: GpuPanelProps) {
   const tempHistory = useMetricsHistoryTail(sparkId, "gpu.temp");
   const usageHistory = useMetricsHistoryTail(sparkId, "gpu.usage");
   const cpuTempHistory = useMetricsHistoryTail(sparkId, "cpu.temp");
+  const live = metricsFresh !== false;
+  const n = (v: number | null | undefined) => (live ? v : null);
 
-  const temperature = gpu?.temperature ?? 0;
-  const displayTemp = temperatureUnit === "fahrenheit" ? celsiusToFahrenheit(temperature) : temperature;
-  const tempLabel = temperatureUnit === "fahrenheit" ? `${displayTemp}°F` : `${displayTemp}°C`;
-  const usage = gpu?.usage ?? 0;
-  const powerDraw = gpu?.power?.draw ?? 0;
-  const powerLimit = gpu?.power?.limit ?? 0;
+  const temperature = n(gpu?.temperature);
+  const displayTemp = temperature != null && temperatureUnit === "fahrenheit" ? celsiusToFahrenheit(temperature) : temperature;
+  const tempLabel = temperature == null ? "—" : temperatureUnit === "fahrenheit" ? `${displayTemp}°F` : `${displayTemp}°C`;
+  const usage = n(gpu?.usage);
+  const powerDraw = n(gpu?.power?.draw);
+  const powerLimit = n(gpu?.power?.limit);
 
-  const vramUsed = gpu?.vram?.used ?? 0;
-  const vramTotal = gpu?.vram?.total ?? 0;
-  const vramPct = gpu?.vram?.percentage ?? 0;
+  const useUma = memoryKind === "uma" || (memoryKind !== "vram" && (unifiedMemory?.total ?? 0) > 0);
+  const vramUsed = n(useUma ? unifiedMemory?.used : gpu?.vram?.used);
+  const vramTotal = n(useUma ? unifiedMemory?.total : gpu?.vram?.total);
+  const memAvailable = n(useUma ? unifiedMemory?.available : gpu?.vram?.available);
+  const memLabel = useUma ? "UMA" : "VRAM";
 
   const cpuTemperature = cpu?.temperature ?? 0;
   const cpuDisplayTemp =
@@ -68,7 +76,9 @@ export function GpuPanel({ gpu, cpu, sparkId, temperatureUnit, className }: GpuP
     temperatureUnit === "fahrenheit" ? `${cpuDisplayTemp}°F` : `${cpuDisplayTemp}°C`;
 
   const tempColor =
-    temperature > 85
+    temperature == null
+      ? "var(--color-muted)"
+      : temperature > 85
       ? "var(--color-danger)"
       : temperature > 65
         ? "var(--color-warning)"
@@ -93,7 +103,7 @@ export function GpuPanel({ gpu, cpu, sparkId, temperatureUnit, className }: GpuP
         label="Usage"
         color="var(--color-accent)"
         spark={<Sparkline data={usageHistory} color="var(--color-accent)" width={180} />}
-        value={<span className="text-text-strong">{usage}%</span>}
+        value={<span className="text-text-strong">{usage == null ? "—" : `${usage}%`}</span>}
       />
       <MetricRow
         label="Temperature"
@@ -112,7 +122,7 @@ export function GpuPanel({ gpu, cpu, sparkId, temperatureUnit, className }: GpuP
       <div className="flex justify-between text-sm">
         <span className="text-muted">GPU Power</span>
         <span className="font-tabular text-sm text-text">
-          {powerDraw}W / {powerLimit}W
+          {powerDraw == null ? "—" : `${powerDraw}W`} / {powerLimit == null ? "—" : `${powerLimit}W`}
         </span>
       </div>
 
@@ -173,29 +183,29 @@ export function GpuPanel({ gpu, cpu, sparkId, temperatureUnit, className }: GpuP
         );
       })()}
 
-      {/* GPU-allocated memory (portion of the unified pool held by GPU compute apps) */}
+      {/* Spark UMA is host memory from node-exporter, not discrete GPU allocation. */}
       {gpu && (
         <div className="space-y-2 border-t border-border pt-3">
-          {vramTotal > 0 ? (
+          {vramTotal != null && vramTotal > 0 ? (
             <>
               <MetricBar
-                label="VRAM"
-                value={vramUsed}
+                label={memLabel}
+                value={vramUsed ?? 0}
                 max={vramTotal}
-                caption={vramTotal > 0 ? `${formatMb(vramUsed).replace(/ (GB|MB)$/, "")} / ${formatMb(vramTotal)}` : "—"}
+                caption={`${vramUsed == null ? "—" : formatMb(vramUsed).replace(/ (GB|MB)$/, "")} / ${formatMb(vramTotal)}`}
               />
-              {gpu.vram.available > 0 && (
+              {memAvailable != null && memAvailable > 0 && (
                 <div className="flex justify-between text-xs">
                   <span className="text-muted">Available</span>
-                  <span className="font-tabular text-text">{formatMb(gpu.vram.available)}</span>
+                  <span className="font-tabular text-text">{formatMb(memAvailable)}</span>
                 </div>
               )}
             </>
           ) : (
             <div className="flex justify-between text-xs">
-              <span className="text-muted">VRAM</span>
+              <span className="text-muted">{memLabel}</span>
               <span className="font-tabular text-text">
-                {vramUsed > 0 ? `${formatMb(vramUsed)} used` : "—"}
+                {vramUsed != null && vramUsed > 0 ? `${formatMb(vramUsed)} used` : "—"}
               </span>
             </div>
           )}

@@ -28,6 +28,7 @@ import { formatLlmBaseUrl, parseLlmTargetInput } from "../src/shared/llmTarget.j
 import { llmDaily } from "./collectors/LlmDaily.js";
 import { compareSemver, getLatestRelease } from "./collectors/HermesReleases.js";
 import { authStub } from "./authStub.js";
+import { getObserveHub, snapshotToPanels, dispatchSnapshot } from "./observe/hub.js";
 
 dotenv.config();
 
@@ -205,6 +206,46 @@ const server = createServer(app);
 
 app.use(express.json());
 app.use(authStub);
+
+const observeHub = getObserveHub();
+
+app.post("/api/observe/snapshot", (req, res) => {
+  const outcome = dispatchSnapshot(observeHub, req.body, {
+    now: () => Date.now(),
+    apply(stored, t) {
+      for (const mon of monitors.values()) {
+        if (mon.spark.id === stored.node || mon.spark.lanIp === stored.node) {
+          mon.applyInboundSnapshot(stored, snapshotToPanels(stored, { now: t, receivedAt: t }), t);
+        }
+      }
+    },
+  });
+  if (outcome.status !== 200) return res.status(outcome.status).json(outcome.body);
+  res.json(outcome.body);
+});
+
+app.get("/api/observe/lease", (req, res) => {
+  const node = String(req.query.node || "");
+  const active = node ? observeHub.activeLease(node) : null;
+  res.json({ active: Boolean(active), lease: active });
+});
+
+app.post("/api/observe/lease", (req, res) => {
+  const body = req.body || {};
+  const result = body.renew ? observeHub.renewLease(body) : observeHub.grantLease(body);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json({ ok: true, ...result });
+});
+
+app.delete("/api/observe/lease", (req, res) => {
+  const err = observeHub.releaseLease(req.body || {});
+  if (err) return res.status(400).json({ error: err });
+  res.json({ ok: true });
+});
+
+app.get("/metrics", (_req, res) => {
+  res.type("text/plain; version=0.0.4").send(observeHub.metrics());
+});
 
 function clientKey(req) {
   return req.ip || req.socket?.remoteAddress || "unknown";

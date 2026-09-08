@@ -506,6 +506,11 @@ export interface SparkSnapshot {
   hermes?: HermesStatus;
   hardware: HardwareInfo;
   metrics: SparkMetrics;
+  /** NodeSnapshot quality from the collect-once hub. */
+  observeQuality?: "measured" | "derived" | "degraded" | "unavailable" | null;
+  observedAtNs?: number | null;
+  /** False when hub measurements are expired or unavailable. Independent of SSH reachability. */
+  metricsFresh?: boolean;
 }
 
 // ─── WebSocket envelope ───────────────────────────────────

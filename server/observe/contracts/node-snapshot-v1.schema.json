@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dgxspark.local/telemetry/node-snapshot-v1.schema.json",
+  "title": "DGX node snapshot v1 (standalone pusher document)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "producer_id",
+    "seq",
+    "run_id",
+    "node",
+    "observed_at_ns",
+    "monotonic_ns",
+    "source_age_ms",
+    "quality",
+    "capabilities",
+    "metrics"
+  ],
+  "properties": {
+    "contract": { "const": "dgx.node-snapshot.v1" },
+    "producer_id": { "type": "string", "minLength": 1 },
+    "seq": { "type": "integer", "minimum": 0 },
+    "run_id": { "type": ["string", "null"], "minLength": 1 },
+    "observed_at_ns": { "type": "integer", "minimum": 0 },
+    "node": { "type": "string", "minLength": 1 },
+    "monotonic_ns": { "type": "integer", "minimum": 0 },
+    "source_age_ms": { "type": "number", "minimum": 0 },
+    "quality": {
+      "enum": ["measured", "derived", "degraded", "unavailable"]
+    },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "metrics": { "$ref": "#/$defs/metrics" },
+    "extensions": { "$ref": "#/$defs/extensions" }
+  },
+  "$defs": {
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "node.steady",
+          "node.burst",
+          "output.text",
+          "engine.step",
+          "speculative.rows",
+          "routing.experts",
+          "power.system"
+        ]
+      }
+    },
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "monotonic_ns",
+        "source_age_ms",
+        "quality",
+        "capabilities",
+        "metrics"
+      ],
+      "properties": {
+        "node": { "type": "string", "minLength": 1 },
+        "monotonic_ns": { "type": "integer", "minimum": 0 },
+        "source_age_ms": { "type": "number", "minimum": 0 },
+        "quality": {
+          "enum": ["measured", "derived", "degraded", "unavailable"]
+        },
+        "capabilities": { "$ref": "#/$defs/capabilities" },
+        "metrics": { "$ref": "#/$defs/metrics" },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gpu.util.pct": { "$ref": "#/$defs/metricPct" },
+        "gpu.power.w": { "$ref": "#/$defs/metricW" },
+        "gpu.temp.c": { "$ref": "#/$defs/metricC" },
+        "gpu.clock.sm.mhz": { "$ref": "#/$defs/metricMhz" },
+        "system.power.w": { "$ref": "#/$defs/metricW" },
+        "system.cpu.util.pct": { "$ref": "#/$defs/metricPct" },
+        "memory.total.bytes": { "$ref": "#/$defs/metricBytes" },
+        "memory.available.bytes": { "$ref": "#/$defs/metricBytes" },
+        "fabric.roce.rx.bytes_total": { "$ref": "#/$defs/metricBytesTotal" },
+        "fabric.roce.tx.bytes_total": { "$ref": "#/$defs/metricBytesTotal" },
+        "vm.swap_in.pages_total": { "$ref": "#/$defs/metricPagesTotal" },
+        "vm.major_faults.total": { "$ref": "#/$defs/metricCount" },
+        "storage.nvme.read.bytes_total": { "$ref": "#/$defs/metricBytesTotal" }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "unit", "source", "quality", "age_ms"],
+      "properties": {
+        "value": { "type": ["number", "null"] },
+        "unit": { "type": "string", "minLength": 1 },
+        "source": {
+          "enum": [
+            "node-exporter",
+            "dcgm",
+            "procfs",
+            "sysfs",
+            "nvml",
+            "power-probe",
+            "engine",
+            "derived",
+            "exporter-http",
+            "ssh-probe"
+          ]
+        },
+        "quality": {
+          "enum": ["measured", "derived", "degraded", "unavailable"]
+        },
+        "age_ms": { "type": "number", "minimum": 0 },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "quality": { "const": "unavailable" } },
+            "required": ["quality"]
+          },
+          "then": { "properties": { "value": { "type": "null" } } }
+        },
+        {
+          "if": {
+            "properties": { "quality": { "enum": ["measured", "derived", "degraded"] } },
+            "required": ["quality"]
+          },
+          "then": { "properties": { "value": { "type": "number" } } }
+        }
+      ]
+    },
+    "metricPct": {
+      "allOf": [
+        { "$ref": "#/$defs/metric" },
+        { "properties": { "unit": { "const": "pct" } } }
+      ]
+    },
+    "metricW": {
+      "allOf": [
+        { "$ref": "#/$defs/metric" },
+        { "properties": { "unit": { "const": "w" } } }
+      ]
+    },
+    "metricC": {
+      "allOf": [
+        { "$ref": "#/$defs/metric" },
+        { "properties": { "unit": { "const": "c" } } }
+      ]
+    },
+    "metricMhz": {
+      "allOf": [
+        { "$ref": "#/$defs/metric" },
+        { "properties": { "unit": { "const": "mhz" } } }
+      ]
+    },
+    "metricBytes": {
+      "allOf": [
+        { "$ref": "#/$defs/metric" },
+        { "properties": { "unit": { "const": "bytes" } } }
+      ]
+    },
+    "metricBytesTotal": {
+      "allOf": [
+        { "$ref": "#/$defs/metric" },
+        { "properties": { "unit": { "const": "bytes_total" } } }
+      ]
+    },
+    "metricPagesTotal": {
+      "allOf": [
+        { "$ref": "#/$defs/metric" },
+        { "properties": { "unit": { "const": "pages_total" } } }
+      ]
+    },
+    "metricCount": {
+      "allOf": [
+        { "$ref": "#/$defs/metric" },
+        { "properties": { "unit": { "const": "count" } } }
+      ]
+    }
+  }
+}

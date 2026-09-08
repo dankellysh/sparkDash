@@ -9,7 +9,7 @@
     "dev:client": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test server/collectors/__tests__/*.test.js server/sparks/__tests__/*.test.js",
+    "test": "node --test server/collectors/__tests__/*.test.js server/sparks/__tests__/*.test.js server/observe/*.test.js src/viz/test_frame_reducer.js",
     "preview": "vite preview",
     "start": "node server/index.js",
     "docker:up": "docker compose up -d",
@@ -32,6 +32,7 @@
   "homepage": "https://x.com/MiaAI_lab",
   "license": "MIT",
   "dependencies": {
+    "ajv": "^8.20.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "undici": "^6.24.1",
