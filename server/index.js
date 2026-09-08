@@ -29,6 +29,7 @@ import { llmDaily } from "./collectors/LlmDaily.js";
 import { compareSemver, getLatestRelease } from "./collectors/HermesReleases.js";
 import { authStub } from "./authStub.js";
 import { getObserveHub, snapshotToPanels, dispatchSnapshot } from "./observe/hub.js";
+import { getTraceHub, setTraceFanout } from "./observe/trace.js";
 
 dotenv.config();
 
@@ -218,6 +219,11 @@ app.post("/api/observe/snapshot", (req, res) => {
           mon.applyInboundSnapshot(stored, snapshotToPanels(stored, { now: t, receivedAt: t }), t);
         }
       }
+      try {
+        getTraceHub().noteNodeSnapshot(stored);
+      } catch {
+        /* recording optional for fleet ingest */
+      }
     },
   });
   if (outcome.status !== 200) return res.status(outcome.status).json(outcome.body);
@@ -245,6 +251,41 @@ app.delete("/api/observe/lease", (req, res) => {
 
 app.get("/metrics", (_req, res) => {
   res.type("text/plain; version=0.0.4").send(observeHub.metrics());
+});
+
+app.post("/api/observe/event", async (req, res) => {
+  let hub;
+  try {
+    hub = getTraceHub();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+  const out = await hub.ingest(req.body);
+  if (out.error) return res.status(400).json({ error: out.error });
+  if (out.duplicate) return res.json({ ok: true, duplicate: true });
+  res.json({
+    ok: true,
+    hub_order: out.event.hub_order,
+    cursor: { run_id: out.event.run_id, hub_order: out.event.hub_order },
+  });
+});
+
+app.get("/api/observe/runs", (_req, res) => {
+  try {
+    res.json({ runs: getTraceHub().recorder.listRuns() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/observe/run/:id", async (req, res) => {
+  try {
+    const hub = getTraceHub();
+    const events = await hub.recorder.readEvents(req.params.id);
+    res.json({ run_id: req.params.id, events });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 function clientKey(req) {
@@ -1530,6 +1571,9 @@ app.get("*splat", (_req, res) => {
 
 // ─── WebSocket ──────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: "/ws" });
+setTraceFanout((ev) => {
+  broadcastPayload(JSON.stringify({ type: "observe.event", event: ev }));
+});
 wss.on("connection", (ws) => {
   console.log("[ws] client connected");
   // Send the initial snapshot through the same path the broadcast uses so the

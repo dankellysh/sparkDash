@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect, useState } from "react";
-import { heatBlend, reduceAll } from "./frameReducer.js";
+import { emptyScene, heatBlend, reduceAll } from "./frameReducer.js";
 import { FIXTURES } from "./fixtures.js";
 
 const NAMES = ["ds", "small", "noroute", "scale", "two", "ranks", "gap", "geomcap"] as const;
@@ -11,8 +11,72 @@ function pickFixture(): (typeof NAMES)[number] {
 }
 
 export function VizPage() {
+  const params = new URLSearchParams(window.location.search);
+  const runId = params.get("run");
   const [name, setName] = useState(pickFixture);
-  const scene = useMemo(() => reduceAll(FIXTURES[name]()), [name]);
+  const [liveEvents, setLiveEvents] = useState(null);
+  const [fleet, setFleet] = useState([]);
+  useEffect(() => {
+    fetch("/api/sparks")
+      .then((r) => r.json())
+      .then((d) => setFleet(d.sparks || []))
+      .catch(() => setFleet([]));
+  }, []);
+  useEffect(() => {
+    if (!runId) return;
+    let stop = false;
+    const buf = [];
+    let ready = false;
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    const merge = (hist) => {
+      const seen = new Set(hist.map((e) => e.hub_order));
+      const extra = buf.filter((e) => !seen.has(e.hub_order));
+      setLiveEvents([...hist, ...extra].sort((a, b) => a.hub_order - b.hub_order));
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "observe.event" && msg.event?.run_id === runId) {
+          if (stop) return;
+          buf.push(msg.event);
+          if (ready) {
+            setLiveEvents((prev) => {
+              const base = prev || [];
+              const seen = new Set(base.map((e) => e.hub_order));
+              if (seen.has(msg.event.hub_order)) return base;
+              return [...base, msg.event].sort((a, b) => a.hub_order - b.hub_order);
+            });
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    ws.onopen = () => {
+      fetch(`/api/observe/run/${encodeURIComponent(runId)}`)
+        .then((r) => {
+          if (!r.ok) throw new Error("history");
+          return r.json();
+        })
+        .then((d) => {
+          if (stop) return;
+          if (!Array.isArray(d.events)) throw new Error("history");
+          ready = true;
+          merge(d.events);
+        })
+        .catch(() => {
+          if (!stop) setLiveEvents(null);
+        });
+    };
+    return () => {
+      stop = true;
+      ws.close();
+    };
+  }, [runId]);
+  const scene = useMemo(() => {
+    if (runId) return liveEvents ? reduceAll(liveEvents) : emptyScene();
+    return reduceAll(FIXTURES[name]());
+  }, [name, runId, liveEvents]);
   const blend = useMemo(() => heatBlend(scene), [scene]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestIds = Array.from(
@@ -81,9 +145,17 @@ export function VizPage() {
           </select>
         </label>
         <span className="text-xs text-muted">
-          {scene.model_id} · cursor {scene.cursor.hub_order} · scale {blend.scale}:1
+          {scene.model_id || "no run"} · cursor {scene.cursor.hub_order} · scale {blend.scale}:1
         </span>
       </header>
+      <p className="mb-2 text-xs text-muted">
+        topology{" "}
+        {fleet.length
+          ? fleet.map((s) => `${s.name || s.id} (${s.role || "spark"})`).join(", ")
+          : scene.members.join(", ") || "—"}
+        {" · "}
+        run {runId || scene.run_id || "fixture"} · occupancy not shown
+      </p>
       {scene.gaps.length > 0 && (
         <p className="mb-2 text-xs text-muted">
           gaps {scene.gaps.map((g) => `${g.first}-${g.last} (${g.reason})`).join("; ")}

@@ -162,6 +162,12 @@ test("runtime schema copies match frozen contracts", () => {
     true,
     "server observe schema copy"
   );
+  const serverTrace = readFileSync(join(here, "../../server/observe/contracts/trace-event-v1.schema.json"));
+  assert.equal(
+    serverTrace.equals(readFileSync(join(frozen, "trace-event-v1.schema.json"))),
+    true,
+    "server trace schema copy"
+  );
 });
 
 test("BUNDLE_SHA256 matches MANIFEST.json", () => {

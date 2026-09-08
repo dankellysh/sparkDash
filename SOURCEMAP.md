@@ -14,4 +14,6 @@
 - Collect-once hub: `server/observe/hub.js` Ajv-validates standalone NodeSnapshot
   from `server/observe/contracts/` (copied into the production image with `server/`).
   Fallback HTTP→SSH is `server/observe/fallback.js`. Spark UMA uses `unifiedMemory` (MiB).
+- Slice 3 recording: `server/observe/trace.js` stamps `hub_order` then appends
+  jsonl+zstd under `/app/recordings`. Probe helper is DGXSpark `surfaces/probe/`.
 - `server/authStub.js`: local no-op. Not upstream. LAN-trust; not a login product.
