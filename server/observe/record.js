@@ -43,7 +43,7 @@ export function parseRecordingYaml(text) {
 }
 
 export function loadRecordingConfig(filePath) {
-  const p = filePath || "/app/config/recording.yaml";
+  const p = filePath || process.env.RECORDING_YAML || "/app/config/recording.yaml";
   let text;
   try {
     text = fs.readFileSync(p, "utf8");

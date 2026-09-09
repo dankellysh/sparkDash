@@ -28,7 +28,7 @@ import { formatLlmBaseUrl, parseLlmTargetInput } from "../src/shared/llmTarget.j
 import { llmDaily } from "./collectors/LlmDaily.js";
 import { compareSemver, getLatestRelease } from "./collectors/HermesReleases.js";
 import { authStub } from "./authStub.js";
-import { getObserveHub, snapshotToPanels, dispatchSnapshot } from "./observe/hub.js";
+import { getObserveHub, snapshotToPanels, dispatchSnapshot, STALE_MS } from "./observe/hub.js";
 import { getTraceHub, setTraceFanout } from "./observe/trace.js";
 
 dotenv.config();
@@ -281,8 +281,46 @@ app.get("/api/observe/runs", (_req, res) => {
 app.get("/api/observe/run/:id", async (req, res) => {
   try {
     const hub = getTraceHub();
-    const events = await hub.recorder.readEvents(req.params.id);
-    res.json({ run_id: req.params.id, events });
+    let events = await hub.recorder.readEvents(req.params.id);
+    const after = req.query.after;
+    if (after != null && after !== "") {
+      const n = Number(after);
+      if (!Number.isInteger(n) || n < 0) return res.status(400).json({ error: "after must be a non-negative integer" });
+      events = events.filter((e) => e.hub_order > n);
+    }
+    const last = events.length ? events[events.length - 1] : null;
+    res.json({
+      run_id: req.params.id,
+      events,
+      cursor: last ? { run_id: req.params.id, hub_order: last.hub_order } : { run_id: req.params.id, hub_order: after != null && after !== "" ? Number(after) : -1 },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/observe/health", (_req, res) => {
+  try {
+    const now = Date.now();
+    const nodes = {};
+    for (const [id, snap] of Object.entries(observeHub.all())) {
+      const observedAge = now - snap.observed_at_ns / 1e6;
+      const rec = observeHub.receivedAt(id);
+      const receiptAge = rec == null ? Infinity : now - rec;
+      const age_ms = Math.max(0, observedAge, Number.isFinite(receiptAge) ? receiptAge : 0);
+      nodes[id] = {
+        quality: snap.quality,
+        age_ms,
+        stale: receiptAge > STALE_MS || observedAge > STALE_MS,
+      };
+    }
+    res.json({
+      bind: BIND_HOST,
+      port: PORT,
+      stale_ms: STALE_MS,
+      nodes,
+      runs: getTraceHub().recorder.listRuns().length,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

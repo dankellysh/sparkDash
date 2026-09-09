@@ -96,7 +96,7 @@ export function parseRollupYaml(text) {
 }
 
 export function loadRollupBlocks(filePath) {
-  const p = filePath || "/app/config/rollups.yaml";
+  const p = filePath || process.env.ROLLUPS_YAML || "/app/config/rollups.yaml";
   let text;
   try {
     text = fs.readFileSync(p, "utf8");
@@ -227,6 +227,9 @@ export function createObserveHub(options = {}) {
     },
     get(node) {
       return snapshots[node] || null;
+    },
+    receivedAt(node) {
+      return meta[node] ? meta[node].received_at : null;
     },
     all() {
       return snapshots;

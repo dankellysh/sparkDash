@@ -25,52 +25,94 @@ export function VizPage() {
   useEffect(() => {
     if (!runId) return;
     let stop = false;
+    let ws;
+    let timer;
+    let gen = 0;
     const buf = [];
     let ready = false;
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    let lastOrder = -1;
+    const proto = location.protocol === "https:" ? "wss" : "ws";
     const merge = (hist) => {
-      const seen = new Set(hist.map((e) => e.hub_order));
-      const extra = buf.filter((e) => !seen.has(e.hub_order));
-      setLiveEvents([...hist, ...extra].sort((a, b) => a.hub_order - b.hub_order));
+      setLiveEvents((prev) => {
+        const base = prev || [];
+        const seen = new Set(base.map((e) => e.hub_order));
+        const add = [...hist, ...buf].filter((e) => e && !seen.has(e.hub_order));
+        const all = [...base, ...add].sort((a, b) => a.hub_order - b.hub_order);
+        if (all.length) lastOrder = all[all.length - 1].hub_order;
+        return all;
+      });
     };
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === "observe.event" && msg.event?.run_id === runId) {
-          if (stop) return;
-          buf.push(msg.event);
-          if (ready) {
-            setLiveEvents((prev) => {
-              const base = prev || [];
-              const seen = new Set(base.map((e) => e.hub_order));
-              if (seen.has(msg.event.hub_order)) return base;
-              return [...base, msg.event].sort((a, b) => a.hub_order - b.hub_order);
-            });
-          }
+    const connect = () => {
+      if (stop) return;
+      if (ws) {
+        const old = ws;
+        ws = null;
+        try {
+          old.close();
+        } catch {
+          /* ignore */
         }
-      } catch {
-        /* ignore */
       }
+      const my = ++gen;
+      ready = false;
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "observe.event" && msg.event?.run_id === runId) {
+            if (stop || my !== gen) return;
+            buf.push(msg.event);
+            if (ready) {
+              setLiveEvents((prev) => {
+                const base = prev || [];
+                const seen = new Set(base.map((e) => e.hub_order));
+                if (seen.has(msg.event.hub_order)) return base;
+                lastOrder = Math.max(lastOrder, msg.event.hub_order);
+                return [...base, msg.event].sort((a, b) => a.hub_order - b.hub_order);
+              });
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+      ws.onopen = () => {
+        if (stop || my !== gen) return;
+        const q = lastOrder >= 0 ? `?after=${lastOrder}` : "";
+        fetch(`/api/observe/run/${encodeURIComponent(runId)}${q}`)
+          .then((r) => {
+            if (!r.ok) throw new Error("history");
+            return r.json();
+          })
+          .then((d) => {
+            if (stop || my !== gen) return;
+            if (!Array.isArray(d.events)) throw new Error("history");
+            merge(d.events);
+            ready = true;
+          })
+          .catch(() => {
+            if (stop || my !== gen) return;
+            if (lastOrder < 0) setLiveEvents(null);
+            try {
+              ws.close();
+            } catch {
+              /* ignore */
+            }
+          });
+      };
+      ws.onclose = () => {
+        if (my !== gen) return;
+        ready = false;
+        gen += 1;
+        if (!stop) timer = setTimeout(connect, 1000);
+      };
     };
-    ws.onopen = () => {
-      fetch(`/api/observe/run/${encodeURIComponent(runId)}`)
-        .then((r) => {
-          if (!r.ok) throw new Error("history");
-          return r.json();
-        })
-        .then((d) => {
-          if (stop) return;
-          if (!Array.isArray(d.events)) throw new Error("history");
-          ready = true;
-          merge(d.events);
-        })
-        .catch(() => {
-          if (!stop) setLiveEvents(null);
-        });
-    };
+    connect();
     return () => {
       stop = true;
-      ws.close();
+      gen += 1;
+      clearTimeout(timer);
+      if (ws) ws.close();
     };
   }, [runId]);
   const scene = useMemo(() => {
